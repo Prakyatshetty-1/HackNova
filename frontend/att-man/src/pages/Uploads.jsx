@@ -9,6 +9,7 @@ import {
   X,
   CheckCircle2,
   Loader2,
+  Download,
 } from "lucide-react";
 import "../styles/Uploads.css";
 import { getAllSubjects, getSubjectsBySemester } from "../data/data";
@@ -43,11 +44,13 @@ const Button = ({
   size = "default",
   className = "",
   onClick,
+  disabled = false,
   ...props
 }) => (
   <button
     className={`btn btn-${variant} btn-${size} ${className}`}
     onClick={onClick}
+    disabled={disabled}
     {...props}
   >
     {children}
@@ -59,6 +62,11 @@ const Badge = ({ children, variant = "default", className = "" }) => (
   <span className={`badge badge-${variant} ${className}`}>{children}</span>
 );
 
+// Alert Component
+const Alert = ({ children, variant = "default", className = "" }) => (
+  <div className={`alert alert-${variant} ${className}`}>{children}</div>
+);
+
 // ============= Main Component =============
 
 export default function UploadPage() {
@@ -67,6 +75,9 @@ export default function UploadPage() {
   const [selectedYear, setSelectedYear] = useState("");
   const [selectedClass, setSelectedClass] = useState("");
   const [selectedSubject, setSelectedSubject] = useState("");
+  const [alertMessage, setAlertMessage] = useState(null);
+
+  const API_BASE_URL = "http://localhost:5000/api";
 
   // Get filtered subjects based on selected semester
   const availableSubjects = useMemo(() => {
@@ -93,52 +104,138 @@ export default function UploadPage() {
     setIsDragging(false);
   }, []);
 
-  const handleDrop = useCallback((e) => {
+  const handleDrop = (e) => {
     e.preventDefault();
     setIsDragging(false);
     const droppedFiles = Array.from(e.dataTransfer.files);
     processFiles(droppedFiles);
-  }, []);
+  };
 
-  const handleFileInput = useCallback((e) => {
+  const handleFileInput = (e) => {
     if (e.target.files) {
       const selectedFiles = Array.from(e.target.files);
       processFiles(selectedFiles);
     }
-  }, []);
+  };
 
-  const processFiles = (fileList) => {
+  const processFiles = async (fileList) => {
+    // Validate selections
+    if (!selectedYear || !selectedClass || !selectedSubject) {
+      setAlertMessage({
+        type: "error",
+        message: "Please select Academic Year, Class, and Subject before uploading files.",
+      });
+      setTimeout(() => setAlertMessage(null), 5000);
+      return;
+    }
+
     const newFiles = fileList.map((file) => ({
       id: Math.random().toString(36).substr(2, 9),
       name: file.name,
       size: file.size,
       type: file.type,
+      file: file, // Store the actual file object
       status: "pending",
       progress: 0,
+      downloadUrl: null,
+      pdfDownloadUrl: null,
+      summary: null,
+      preview: null,
     }));
+
     setFiles((prev) => [...prev, ...newFiles]);
 
-    newFiles.forEach((file) => {
-      setTimeout(() => {
-        setFiles((prev) =>
-          prev.map((f) =>
-            f.id === file.id ? { ...f, status: "processing", progress: 50 } : f
-          )
-        );
-      }, 500);
+    // Process each file
+    for (const fileData of newFiles) {
+      await uploadToAPI(fileData);
+    }
+  };
 
-      setTimeout(() => {
+  const uploadToAPI = async (fileData) => {
+    try {
+      // Update status to processing
+      setFiles((prev) =>
+        prev.map((f) =>
+          f.id === fileData.id ? { ...f, status: "processing", progress: 50 } : f
+        )
+      );
+
+      // Create FormData
+      const formData = new FormData();
+      formData.append("file", fileData.file);
+      formData.append("selectedYear", selectedYear);
+      formData.append("selectedClass", selectedClass);
+      formData.append("selectedSubject", selectedSubject);
+
+      // Send to Flask API
+      const response = await fetch(`${API_BASE_URL}/process-attendance`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      if (result.success) {
+        // Update file status to completed
         setFiles((prev) =>
           prev.map((f) =>
-            f.id === file.id ? { ...f, status: "completed", progress: 100 } : f
+            f.id === fileData.id
+              ? {
+                  ...f,
+                  status: "completed",
+                  progress: 100,
+                  downloadUrl: `${API_BASE_URL}/download/${result.filename}`,
+                  pdfDownloadUrl: result.pdf_filename ? `${API_BASE_URL}/download/${result.pdf_filename}` : null,
+                  summary: result.summary,
+                  preview: result.preview,
+                  filename: result.filename,
+                  pdfFilename: result.pdf_filename,
+                }
+              : f
           )
         );
-      }, 2000);
-    });
+
+        setAlertMessage({
+          type: "success",
+          message: `Successfully processed ${fileData.name}`,
+        });
+        setTimeout(() => setAlertMessage(null), 5000);
+      } else {
+        throw new Error(result.error || "Processing failed");
+      }
+    } catch (error) {
+      console.error("Upload error:", error);
+      setFiles((prev) =>
+        prev.map((f) =>
+          f.id === fileData.id
+            ? { ...f, status: "error", progress: 0, errorMessage: error.message }
+            : f
+        )
+      );
+
+      setAlertMessage({
+        type: "error",
+        message: `Failed to process ${fileData.name}: ${error.message}`,
+      });
+      setTimeout(() => setAlertMessage(null), 5000);
+    }
   };
 
   const removeFile = (id) => {
     setFiles((prev) => prev.filter((f) => f.id !== id));
+  };
+
+  const downloadFile = (downloadUrl, filename) => {
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const formatFileSize = (bytes) => {
@@ -161,6 +258,13 @@ export default function UploadPage() {
             </p>
           </div>
 
+          {/* Alert Message */}
+          {alertMessage && (
+            <Alert variant={alertMessage.type} className="mb-4">
+              {alertMessage.message}
+            </Alert>
+          )}
+
           {/* Selection Panel */}
           <Card className="selection-panel">
             <CardHeader>
@@ -172,11 +276,12 @@ export default function UploadPage() {
             <CardContent>
               <div className="selection-grid">
                 <div className="form-group">
-                  <label className="form-label">Academic Year</label>
+                  <label className="form-label">Academic Year *</label>
                   <select
                     className="form-select"
                     value={selectedYear}
                     onChange={handleSemesterChange}
+                    required
                   >
                     <option value="">Select Semester</option>
                     <option value="Sem 1">Sem 1</option>
@@ -190,11 +295,12 @@ export default function UploadPage() {
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Class</label>
+                  <label className="form-label">Class *</label>
                   <select
                     className="form-select"
                     value={selectedClass}
                     onChange={(e) => setSelectedClass(e.target.value)}
+                    required
                   >
                     <option value="">Select Class</option>
                     <option value="A">A</option>
@@ -203,14 +309,15 @@ export default function UploadPage() {
                   </select>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Subject</label>
+                  <label className="form-label">Subject *</label>
                   <select
                     className="form-select"
                     value={selectedSubject}
                     onChange={(e) => setSelectedSubject(e.target.value)}
+                    required
                   >
                     <option value="">
-                      {selectedYear 
+                      {selectedYear
                         ? `Select Subject (${availableSubjects.length} available)`
                         : "Select Subject (All subjects)"}
                     </option>
@@ -240,6 +347,8 @@ export default function UploadPage() {
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
                 className={`upload-area ${isDragging ? "dragging" : ""}`}
+                onClick={() => document.getElementById('file-input').click()}
+                style={{ cursor: 'pointer' }}
               >
                 <div className="upload-icon-wrapper">
                   <Upload className="upload-icon" />
@@ -247,13 +356,22 @@ export default function UploadPage() {
                 <h3 className="upload-title">Drop files here</h3>
                 <p className="upload-subtitle">or click to browse</p>
                 <input
+                  id="file-input"
                   type="file"
                   multiple
-                  accept=".pdf,.jpg,.jpeg,.png"
+                  accept="image/*,.pdf"
                   onChange={handleFileInput}
-                  className="upload-input"
+                  style={{ display: 'none' }}
                 />
-                <Button variant="outline" className="upload-button">
+                <Button
+                  variant="outline"
+                  className="upload-button"
+                  disabled={!selectedYear || !selectedClass || !selectedSubject}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    document.getElementById('file-input').click();
+                  }}
+                >
                   Select Files
                 </Button>
                 <p className="upload-info">
@@ -289,6 +407,9 @@ export default function UploadPage() {
                           <p className="file-size">
                             {formatFileSize(file.size)}
                           </p>
+                          {file.errorMessage && (
+                            <p className="file-error">{file.errorMessage}</p>
+                          )}
                         </div>
                         <div className="file-status">
                           {file.status === "pending" && (
@@ -309,10 +430,40 @@ export default function UploadPage() {
                             </Badge>
                           )}
                           {file.status === "completed" && (
-                            <Badge className="status-completed">
-                              <CheckCircle2 className="status-icon" />
-                              Completed
-                            </Badge>
+                            <>
+                              <Badge className="status-completed">
+                                <CheckCircle2 className="status-icon" />
+                                Completed
+                              </Badge>
+                              <div className="button-group">
+                                {file.downloadUrl && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      downloadFile(file.downloadUrl, file.filename)
+                                    }
+                                    className="download-btn"
+                                  >
+                                    <Download className="download-icon" />
+                                    CSV
+                                  </Button>
+                                )}
+                                {file.pdfDownloadUrl && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                      downloadFile(file.pdfDownloadUrl, file.pdfFilename)
+                                    }
+                                    className="download-btn pdf-btn"
+                                  >
+                                    <Download className="download-icon" />
+                                    PDF Report
+                                  </Button>
+                                )}
+                              </div>
+                            </>
                           )}
                           {file.status === "error" && (
                             <Badge variant="destructive">Error</Badge>
@@ -327,6 +478,28 @@ export default function UploadPage() {
                           </Button>
                         </div>
                       </div>
+                      
+                      {/* Show preview for completed files */}
+                      {file.status === "completed" && file.preview && (
+                        <div className="file-preview">
+                          <h4>CSV Preview:</h4>
+                          <pre>{file.preview.join("\n")}</pre>
+                        </div>
+                      )}
+
+                      {/* Show summary if available */}
+                      {file.status === "completed" && file.summary && Object.keys(file.summary).length > 0 && (
+                        <div className="file-summary">
+                          <h4>Attendance Summary:</h4>
+                          {Object.entries(file.summary).map(([date, stats]) => (
+                            <div key={date} className="summary-item">
+                              <strong>{date}:</strong> Present: {stats.present}/{stats.total}, 
+                              Absent: {stats.absent}/{stats.total} 
+                              ({stats.attendance_percentage}%)
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -335,7 +508,6 @@ export default function UploadPage() {
                     <Button variant="outline" onClick={() => setFiles([])}>
                       Clear All
                     </Button>
-                    <Button>View Processed Reports</Button>
                   </div>
                 )}
               </CardContent>
