@@ -141,6 +141,7 @@ export default function UploadPage() {
       pdfDownloadUrl: null,
       summary: null,
       preview: null,
+      recordId: null,
     }));
 
     setFiles((prev) => [...prev, ...newFiles]);
@@ -167,7 +168,7 @@ export default function UploadPage() {
       formData.append("selectedClass", selectedClass);
       formData.append("selectedSubject", selectedSubject);
 
-      // Send to Flask API
+      // Send to Flask API (which now uploads to Supabase)
       const response = await fetch(`${API_BASE_URL}/process-attendance`, {
         method: "POST",
         body: formData,
@@ -180,7 +181,7 @@ export default function UploadPage() {
       const result = await response.json();
 
       if (result.success) {
-        // Update file status to completed
+        // Update file status with Supabase URLs
         setFiles((prev) =>
           prev.map((f) =>
             f.id === fileData.id
@@ -188,20 +189,27 @@ export default function UploadPage() {
                   ...f,
                   status: "completed",
                   progress: 100,
-                  downloadUrl: `${API_BASE_URL}/download/${result.filename}`,
-                  pdfDownloadUrl: result.pdf_filename ? `${API_BASE_URL}/download/${result.pdf_filename}` : null,
+                  downloadUrl: result.csv_url || `${API_BASE_URL}/download/${result.filename}`,
+                  pdfDownloadUrl: result.pdf_url || (result.pdf_filename ? `${API_BASE_URL}/download/${result.pdf_filename}` : null),
                   summary: result.summary,
                   preview: result.preview,
                   filename: result.filename,
                   pdfFilename: result.pdf_filename,
+                  recordId: result.record_id, // Store Supabase record ID
+                  csvUrl: result.csv_url,
+                  pdfUrl: result.pdf_url,
                 }
               : f
           )
         );
 
+        const successMsg = result.csv_url 
+          ? `Successfully processed and stored ${fileData.name} in Supabase` 
+          : `Successfully processed ${fileData.name} (stored locally)`;
+        
         setAlertMessage({
           type: "success",
-          message: `Successfully processed ${fileData.name}`,
+          message: successMsg,
         });
         setTimeout(() => setAlertMessage(null), 5000);
       } else {
@@ -225,17 +233,57 @@ export default function UploadPage() {
     }
   };
 
-  const removeFile = (id) => {
+  const removeFile = async (id, recordId) => {
+    // If file has a Supabase record ID, delete from Supabase
+    if (recordId) {
+      try {
+        const response = await fetch(`${API_BASE_URL}/delete-upload/${recordId}`, {
+          method: 'DELETE',
+        });
+        const data = await response.json();
+        
+        if (data.success) {
+          setAlertMessage({
+            type: "success",
+            message: "File deleted from Supabase successfully",
+          });
+          setTimeout(() => setAlertMessage(null), 3000);
+        } else {
+          setAlertMessage({
+            type: "error",
+            message: "Failed to delete from Supabase",
+          });
+          setTimeout(() => setAlertMessage(null), 3000);
+          return; // Don't remove from UI if deletion failed
+        }
+      } catch (error) {
+        console.error("Delete error:", error);
+        setAlertMessage({
+          type: "error",
+          message: `Failed to delete: ${error.message}`,
+        });
+        setTimeout(() => setAlertMessage(null), 3000);
+        return; // Don't remove from UI if deletion failed
+      }
+    }
+    
+    // Remove from local state
     setFiles((prev) => prev.filter((f) => f.id !== id));
   };
 
   const downloadFile = (downloadUrl, filename) => {
-    const link = document.createElement("a");
-    link.href = downloadUrl;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    // If it's a Supabase URL, open in new tab
+    if (downloadUrl && downloadUrl.includes('supabase')) {
+      window.open(downloadUrl, '_blank');
+    } else {
+      // Local download
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
   };
 
   const formatFileSize = (bytes) => {
@@ -254,7 +302,7 @@ export default function UploadPage() {
           <div className="page-header">
             <h1 className="page-title">Upload Attendance</h1>
             <p className="page-description">
-              Upload scanned attendance sheets for processing
+              Upload scanned attendance sheets for processing and storage in Supabase
             </p>
           </div>
 
@@ -337,8 +385,7 @@ export default function UploadPage() {
             <CardHeader>
               <CardTitle>Upload Files</CardTitle>
               <CardDescription>
-                Drag and drop or click to select attendance sheets (PDF, JPG,
-                PNG)
+                Drag and drop or click to select attendance sheets (PDF, JPG, PNG)
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -407,6 +454,11 @@ export default function UploadPage() {
                           <p className="file-size">
                             {formatFileSize(file.size)}
                           </p>
+                          {file.recordId && (
+                            <p className="file-meta">
+                              <small>✓ Stored in Supabase (ID: {file.recordId})</small>
+                            </p>
+                          )}
                           {file.errorMessage && (
                             <p className="file-error">{file.errorMessage}</p>
                           )}
@@ -444,6 +496,7 @@ export default function UploadPage() {
                                       downloadFile(file.downloadUrl, file.filename)
                                     }
                                     className="download-btn"
+                                    title={file.csvUrl ? "Download from Supabase" : "Download locally"}
                                   >
                                     <Download className="download-icon" />
                                     CSV
@@ -457,6 +510,7 @@ export default function UploadPage() {
                                       downloadFile(file.pdfDownloadUrl, file.pdfFilename)
                                     }
                                     className="download-btn pdf-btn"
+                                    title={file.pdfUrl ? "Download from Supabase" : "Download locally"}
                                   >
                                     <Download className="download-icon" />
                                     PDF Report
@@ -471,8 +525,9 @@ export default function UploadPage() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => removeFile(file.id)}
+                            onClick={() => removeFile(file.id, file.recordId)}
                             className="remove-btn"
+                            title={file.recordId ? "Delete from Supabase" : "Remove from list"}
                           >
                             <X className="remove-icon" />
                           </Button>
@@ -534,6 +589,7 @@ export default function UploadPage() {
                     <li>• Clear, well-lit images</li>
                     <li>• Straight alignment of sheets</li>
                     <li>• Complete table borders visible</li>
+                    <li>• Files automatically stored in Supabase</li>
                   </ul>
                 </div>
                 <div className="guideline-section">
