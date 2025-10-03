@@ -127,7 +127,7 @@ export default function AttendanceManager() {
       <div className="card">
         <div className="card-header">
           <h2 className="card-title">STEP 2: UPLOAD FILE</h2>
-          <p className="card-description">Upload your attendance sheets in Excel, CSV, or PDF format</p>
+          <p className="card-description">Upload your attendance sheets as images or PDF files</p>
         </div>
         <div className="card-content">
           <div className="upload-section">
@@ -139,7 +139,7 @@ export default function AttendanceManager() {
                 type="file"
                 className="file-input"
                 multiple
-                accept=".xlsx,.xls,.csv,.pdf"
+                accept="image/*,application/pdf"
                 onChange={(e) => handleFileUpload(e.target.files)}
               />
             </label>
