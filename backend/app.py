@@ -8,6 +8,7 @@ import os
 from dotenv import load_dotenv
 from datetime import datetime
 import io
+from supabase import create_client, Client
 
 # Import the report generation functions
 from generate_attendance_report import compute_attendance, save_report, save_summary, plot_distribution, save_pdf_report
@@ -18,6 +19,14 @@ CORS(app)
 load_dotenv()
 API_KEY = os.getenv("GEMINI_API_KEY")
 genai.configure(api_key=API_KEY)
+
+# Supabase Configuration
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Storage bucket name
+STORAGE_BUCKET = "attendance-files"
 
 PROMPT = """You are analyzing an attendance sheet image. Extract the data and return it in PERFECT CSV format.
 
@@ -103,6 +112,35 @@ def generate_pdf_report(csv_filepath, output_dir, defaulter_threshold=75.0):
         traceback.print_exc()
         return None
 
+def upload_to_supabase(file_path, storage_path, content_type):
+    """Upload file to Supabase Storage"""
+    try:
+        with open(file_path, 'rb') as f:
+            file_data = f.read()
+        
+        response = supabase.storage.from_(STORAGE_BUCKET).upload(
+            path=storage_path,
+            file=file_data,
+            file_options={"content-type": content_type}
+        )
+        
+        # Get public URL
+        public_url = supabase.storage.from_(STORAGE_BUCKET).get_public_url(storage_path)
+        
+        return public_url, storage_path
+    except Exception as e:
+        print(f"❌ Supabase upload failed: {e}")
+        raise e
+
+def save_metadata_to_supabase(metadata):
+    """Save upload metadata to Supabase database"""
+    try:
+        response = supabase.table('attendance_uploads').insert(metadata).execute()
+        return response.data[0]['id'] if response.data else None
+    except Exception as e:
+        print(f"❌ Metadata save failed: {e}")
+        raise e
+
 @app.route('/api/process-attendance', methods=['POST'])
 def process_attendance():
     try:
@@ -116,6 +154,9 @@ def process_attendance():
         
         if file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
+        
+        if not all([selected_year, selected_class, selected_subject]):
+            return jsonify({'error': 'Missing required fields: year, class, or subject'}), 400
         
         # Read file content
         file_content = file.read()
@@ -150,12 +191,14 @@ def process_attendance():
         # Create uploads directory
         os.makedirs('uploads', exist_ok=True)
         
-        # Clean and save CSV
+        # Clean and save CSV locally first
         csv_content = clean_and_save_csv(response.text, csv_filepath)
         
         # Generate summary
         summary = {}
+        pdf_filepath = None
         pdf_filename = None
+        
         try:
             df = pd.read_csv(csv_filepath)
             summary = generate_attendance_summary(df)
@@ -168,9 +211,9 @@ def process_attendance():
                 pdf_filename = f"report_{base_filename}.pdf"
                 # Copy PDF to uploads folder
                 import shutil
-                final_pdf_path = os.path.join('uploads', pdf_filename)
-                shutil.copy(pdf_path, final_pdf_path)
-                print(f"✅ PDF copied to: {final_pdf_path}")
+                pdf_filepath = os.path.join('uploads', pdf_filename)
+                shutil.copy(pdf_path, pdf_filepath)
+                print(f"✅ PDF copied to: {pdf_filepath}")
             else:
                 print("❌ PDF generation returned None or file doesn't exist")
         except Exception as e:
@@ -178,17 +221,81 @@ def process_attendance():
             import traceback
             traceback.print_exc()
         
-        return jsonify({
-            'success': True,
-            'message': 'Attendance processed successfully',
-            'filename': csv_filename,
-            'pdf_filename': pdf_filename,
-            'filepath': csv_filepath,
-            'summary': summary,
-            'preview': csv_content.split('\n')[:6]
-        })
+        # Upload to Supabase Storage
+        folder_path = f"{selected_year}/{selected_class}/{selected_subject}"
+        csv_storage_path = f"{folder_path}/{csv_filename}"
+        
+        try:
+            # Upload CSV to Supabase
+            csv_url, csv_path = upload_to_supabase(
+                csv_filepath, 
+                csv_storage_path, 
+                "text/csv"
+            )
+            print(f"✅ CSV uploaded to Supabase: {csv_url}")
+            
+            # Upload PDF to Supabase if available
+            pdf_url = None
+            pdf_path_storage = None
+            if pdf_filepath and os.path.exists(pdf_filepath):
+                pdf_storage_path = f"{folder_path}/{pdf_filename}"
+                pdf_url, pdf_path_storage = upload_to_supabase(
+                    pdf_filepath, 
+                    pdf_storage_path, 
+                    "application/pdf"
+                )
+                print(f"✅ PDF uploaded to Supabase: {pdf_url}")
+            
+            # Save metadata to Supabase database
+            metadata = {
+                'semester': selected_year,
+                'class': selected_class,
+                'subject': selected_subject,
+                'original_filename': file.filename,
+                'csv_filename': csv_filename,
+                'pdf_filename': pdf_filename,
+                'csv_url': csv_url,
+                'pdf_url': pdf_url,
+                'csv_path': csv_path,
+                'pdf_path': pdf_path_storage,
+                'summary': summary,
+                'upload_timestamp': datetime.now().isoformat(),
+                'processed': True
+            }
+            
+            record_id = save_metadata_to_supabase(metadata)
+            print(f"✅ Metadata saved to Supabase with ID: {record_id}")
+            
+            return jsonify({
+                'success': True,
+                'message': 'Attendance processed and uploaded to Supabase successfully',
+                'filename': csv_filename,
+                'pdf_filename': pdf_filename,
+                'csv_url': csv_url,
+                'pdf_url': pdf_url,
+                'summary': summary,
+                'preview': csv_content.split('\n')[:6],
+                'record_id': record_id
+            })
+            
+        except Exception as supabase_error:
+            print(f"❌ Supabase upload failed: {supabase_error}")
+            # Still return local files if Supabase fails
+            return jsonify({
+                'success': True,
+                'message': 'Attendance processed (Supabase upload failed, files saved locally)',
+                'filename': csv_filename,
+                'pdf_filename': pdf_filename,
+                'filepath': csv_filepath,
+                'summary': summary,
+                'preview': csv_content.split('\n')[:6],
+                'supabase_error': str(supabase_error)
+            })
     
     except Exception as e:
+        print(f"❌ Processing error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': str(e)
@@ -201,6 +308,73 @@ def download_file(filename):
         return send_file(filepath, as_attachment=True, download_name=filename)
     except Exception as e:
         return jsonify({'error': str(e)}), 404
+
+@app.route('/api/get-uploads', methods=['GET'])
+def get_uploads():
+    """Retrieve uploads from Supabase based on filters"""
+    try:
+        semester = request.args.get('semester')
+        class_name = request.args.get('class')
+        subject = request.args.get('subject')
+        
+        # Build query
+        query = supabase.table('attendance_uploads').select('*')
+        
+        if semester:
+            query = query.eq('semester', semester)
+        if class_name:
+            query = query.eq('class', class_name)
+        if subject:
+            query = query.eq('subject', subject)
+        
+        response = query.order('upload_timestamp', desc=True).execute()
+        
+        return jsonify({
+            'success': True,
+            'data': response.data
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/api/delete-upload/<int:record_id>', methods=['DELETE'])
+def delete_upload(record_id):
+    """Delete upload from Supabase storage and database"""
+    try:
+        # Get record to find file paths
+        record = supabase.table('attendance_uploads').select('*').eq('id', record_id).execute()
+        
+        if not record.data:
+            return jsonify({'success': False, 'error': 'Record not found'}), 404
+        
+        file_record = record.data[0]
+        
+        # Delete files from storage
+        try:
+            if file_record.get('csv_path'):
+                supabase.storage.from_(STORAGE_BUCKET).remove([file_record['csv_path']])
+                print(f"✅ Deleted CSV from storage: {file_record['csv_path']}")
+        except Exception as e:
+            print(f"⚠️ CSV deletion warning: {e}")
+        
+        try:
+            if file_record.get('pdf_path'):
+                supabase.storage.from_(STORAGE_BUCKET).remove([file_record['pdf_path']])
+                print(f"✅ Deleted PDF from storage: {file_record['pdf_path']}")
+        except Exception as e:
+            print(f"⚠️ PDF deletion warning: {e}")
+        
+        # Delete database record
+        supabase.table('attendance_uploads').delete().eq('id', record_id).execute()
+        print(f"✅ Deleted record from database: {record_id}")
+        
+        return jsonify({'success': True, 'message': 'Upload deleted successfully'})
+        
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/health', methods=['GET'])
 def health_check():

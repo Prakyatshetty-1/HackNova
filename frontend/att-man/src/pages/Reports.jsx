@@ -1,99 +1,8 @@
-import { Download, Search, FileText, TrendingUp, TrendingDown, Calendar, Filter, X } from "lucide-react"
-import { useState, useMemo } from "react"
+import { Download, Search, FileText, TrendingUp, TrendingDown, Calendar, Filter, X, Loader2 } from "lucide-react"
+import { useState, useMemo, useEffect } from "react"
 import Sidebar from "../components/sidebar"
 import "../styles/Reports.css"
 import { getAllSubjects, getSubjectsBySemester } from "../data/data"
-
-const mockReports = [
-  {
-    id: "1",
-    subject: "Data Structure",
-    semester: "Sem 3",
-    class: "A",
-    totalStudents: 120,
-    totalLectures: 45,
-    avgAttendance: 87.5,
-    lastUpdated: "2024-03-10",
-    trend: "up",
-  },
-  {
-    id: "2",
-    subject: "Computer Network",
-    semester: "Sem 5",
-    class: "B",
-    totalStudents: 115,
-    totalLectures: 42,
-    avgAttendance: 82.3,
-    lastUpdated: "2024-03-09",
-    trend: "down",
-  },
-  {
-    id: "3",
-    subject: "Operating System",
-    semester: "Sem 4",
-    class: "A",
-    totalStudents: 118,
-    totalLectures: 48,
-    avgAttendance: 91.2,
-    lastUpdated: "2024-03-10",
-    trend: "up",
-  },
-  {
-    id: "4",
-    subject: "Database Management System",
-    semester: "Sem 4",
-    class: "C",
-    totalStudents: 122,
-    totalLectures: 40,
-    avgAttendance: 78.9,
-    lastUpdated: "2024-03-08",
-    trend: "down",
-  },
-  {
-    id: "5",
-    subject: "Software Engineering",
-    semester: "Sem 5",
-    class: "A",
-    totalStudents: 110,
-    totalLectures: 44,
-    avgAttendance: 85.6,
-    lastUpdated: "2024-03-10",
-    trend: "up",
-  },
-  {
-    id: "6",
-    subject: "Digital Logic & Computer Architecture",
-    semester: "Sem 3",
-    class: "B",
-    totalStudents: 125,
-    totalLectures: 46,
-    avgAttendance: 89.4,
-    lastUpdated: "2024-03-09",
-    trend: "up",
-  },
-  {
-    id: "7",
-    subject: "Machine Learning",
-    semester: "Sem 7",
-    class: "A",
-    totalStudents: 98,
-    totalLectures: 38,
-    avgAttendance: 92.1,
-    lastUpdated: "2024-03-10",
-    trend: "up",
-  },
-  {
-    id: "8",
-    subject: "Artificial Intelligence",
-    semester: "Sem 6",
-    class: "C",
-    totalStudents: 105,
-    totalLectures: 41,
-    avgAttendance: 88.7,
-    lastUpdated: "2024-03-09",
-    trend: "up",
-  },
-]
 
 // Card Components
 const Card = ({ children, className = "", onClick }) => (
@@ -117,8 +26,8 @@ const CardContent = ({ children, className = "" }) => (
 )
 
 // Button Component
-const Button = ({ children, variant = "default", size = "default", className = "", onClick }) => (
-  <button className={`btn btn-${variant} btn-${size} ${className}`} onClick={onClick}>
+const Button = ({ children, variant = "default", size = "default", className = "", onClick, disabled = false }) => (
+  <button className={`btn btn-${variant} btn-${size} ${className}`} onClick={onClick} disabled={disabled}>
     {children}
   </button>
 )
@@ -133,6 +42,11 @@ const Input = ({ className = "", ...props }) => (
   <input className={`input ${className}`} {...props} />
 )
 
+// Alert Component
+const Alert = ({ children, variant = "default", className = "" }) => (
+  <div className={`alert alert-${variant} ${className}`}>{children}</div>
+)
+
 export default function ReportsPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [selectedReport, setSelectedReport] = useState(null)
@@ -142,6 +56,39 @@ export default function ReportsPage() {
   const [selectedSemester, setSelectedSemester] = useState("")
   const [selectedClass, setSelectedClass] = useState("")
   const [selectedSubject, setSelectedSubject] = useState("")
+
+  // Data states
+  const [reports, setReports] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+
+  const API_BASE_URL = "http://localhost:5000/api"
+
+  // Fetch reports from Supabase
+  useEffect(() => {
+    fetchReports()
+  }, [])
+
+  const fetchReports = async () => {
+    try {
+      setLoading(true)
+      setError(null)
+      
+      const response = await fetch(`${API_BASE_URL}/get-uploads`)
+      const data = await response.json()
+      
+      if (data.success) {
+        setReports(data.data)
+      } else {
+        setError(data.error || "Failed to fetch reports")
+      }
+    } catch (err) {
+      console.error("Error fetching reports:", err)
+      setError("Failed to connect to server")
+    } finally {
+      setLoading(false)
+    }
+  }
 
   // Get available subjects based on selected semester
   const availableSubjects = useMemo(() => {
@@ -153,15 +100,15 @@ export default function ReportsPage() {
 
   // Filter reports based on all criteria
   const filteredReports = useMemo(() => {
-    return mockReports.filter((report) => {
-      const matchesSearch = report.subject.toLowerCase().includes(searchQuery.toLowerCase())
+    return reports.filter((report) => {
+      const matchesSearch = report.subject?.toLowerCase().includes(searchQuery.toLowerCase())
       const matchesSemester = !selectedSemester || report.semester === selectedSemester
       const matchesClass = !selectedClass || report.class === selectedClass
-      const matchesSubject = !selectedSubject || report.subject.toLowerCase().includes(selectedSubject.toLowerCase())
+      const matchesSubject = !selectedSubject || report.subject?.toLowerCase().includes(selectedSubject.toLowerCase())
       
       return matchesSearch && matchesSemester && matchesClass && matchesSubject
     })
-  }, [searchQuery, selectedSemester, selectedClass, selectedSubject])
+  }, [reports, searchQuery, selectedSemester, selectedClass, selectedSubject])
 
   // Clear all filters
   const clearFilters = () => {
@@ -174,18 +121,49 @@ export default function ReportsPage() {
   // Check if any filter is active
   const hasActiveFilters = selectedSemester || selectedClass || selectedSubject || searchQuery
 
+  // Download file from Supabase
+  const handleDownload = (url, filename) => {
+    if (url) {
+      // Open Supabase URL in new tab
+      window.open(url, '_blank')
+    } else {
+      alert("File URL not available")
+    }
+  }
+
+  // Calculate statistics
+  const calculateAvgAttendance = (summary) => {
+    if (!summary || typeof summary !== 'object') return 0
+    
+    const dates = Object.keys(summary)
+    if (dates.length === 0) return 0
+    
+    const totalPercentage = dates.reduce((sum, date) => {
+      return sum + (parseFloat(summary[date]?.attendance_percentage) || 0)
+    }, 0)
+    
+    return (totalPercentage / dates.length).toFixed(1)
+  }
+
+  const formatDate = (dateString) => {
+    const date = new Date(dateString)
+    return date.toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'short', 
+      day: 'numeric' 
+    })
+  }
+
   const getAttendanceColor = (percentage) => {
     if (percentage >= 85) return "text-success"
     if (percentage >= 75) return "text-warning"
     return "text-destructive"
   }
 
-  const totalSubjects = filteredReports.length
+  const totalReports = filteredReports.length
   const avgAttendance = filteredReports.length > 0 
-    ? (filteredReports.reduce((acc, r) => acc + r.avgAttendance, 0) / filteredReports.length).toFixed(1)
+    ? (filteredReports.reduce((acc, r) => acc + parseFloat(calculateAvgAttendance(r.summary)), 0) / filteredReports.length).toFixed(1)
     : 0
-  const totalStudents = filteredReports.reduce((acc, r) => acc + r.totalStudents, 0)
-  const totalLectures = filteredReports.reduce((acc, r) => acc + r.totalLectures, 0)
 
   return (
     <div className="reports-container">
@@ -194,11 +172,18 @@ export default function ReportsPage() {
         <div className="reports-content">
           <div className="page-header">
             <h1 className="page-title">Reports</h1>
-            <p className="page-description">View and download attendance reports</p>
+            <p className="page-description">View and download attendance reports from Supabase</p>
           </div>
 
-          {/* Summary Cards */}
-          
+          {/* Error Alert */}
+          {error && (
+            <Alert variant="error" className="mb-4">
+              {error}
+              <Button variant="ghost" size="sm" onClick={fetchReports} className="ml-2">
+                Retry
+              </Button>
+            </Alert>
+          )}
 
           {/* Search and Filters */}
           <Card className="search-card">
@@ -230,9 +215,9 @@ export default function ReportsPage() {
                     Clear
                   </Button>
                 )}
-                <Button>
-                  <Download className="btn-icon" />
-                  Export
+                <Button onClick={fetchReports} disabled={loading}>
+                  {loading ? <Loader2 className="btn-icon animate-spin" /> : <Download className="btn-icon" />}
+                  Refresh
                 </Button>
               </div>
 
@@ -247,7 +232,7 @@ export default function ReportsPage() {
                         value={selectedSemester}
                         onChange={(e) => {
                           setSelectedSemester(e.target.value)
-                          setSelectedSubject("") // Reset subject when semester changes
+                          setSelectedSubject("")
                         }}
                       >
                         <option value="">All Semesters</option>
@@ -301,15 +286,27 @@ export default function ReportsPage() {
             </CardContent>
           </Card>
 
-          {/* Reports List */}
-          {filteredReports.length === 0 ? (
+          {/* Loading State */}
+          {loading ? (
+            <Card className="empty-state">
+              <CardContent>
+                <div className="empty-state-content">
+                  <Loader2 className="empty-icon animate-spin" />
+                  <h3 className="empty-title">Loading reports...</h3>
+                  <p className="empty-description">Fetching data from Supabase</p>
+                </div>
+              </CardContent>
+            </Card>
+          ) : filteredReports.length === 0 ? (
             <Card className="empty-state">
               <CardContent>
                 <div className="empty-state-content">
                   <FileText className="empty-icon" />
                   <h3 className="empty-title">No reports found</h3>
                   <p className="empty-description">
-                    Try adjusting your filters or search query
+                    {hasActiveFilters 
+                      ? "Try adjusting your filters or search query"
+                      : "Upload some attendance files to see reports here"}
                   </p>
                   {hasActiveFilters && (
                     <Button onClick={clearFilters} className="empty-action">
@@ -321,104 +318,129 @@ export default function ReportsPage() {
             </Card>
           ) : (
             <div className="reports-list">
-              {filteredReports.map((report) => (
-                <Card
-                  key={report.id}
-                  className="report-card"
-                  onClick={() => setSelectedReport(report)}
-                >
-                  <CardContent className="report-content">
-                    <div className="report-inner">
-                      <div className="report-left">
-                        <div className="report-icon">
-                          <FileText className="icon" />
+              {filteredReports.map((report) => {
+                const avgAttendanceValue = calculateAvgAttendance(report.summary)
+                
+                return (
+                  <Card
+                    key={report.id}
+                    className="report-card"
+                  >
+                    <CardContent className="report-content">
+                      <div className="report-inner">
+                        <div className="report-left">
+                          <div className="report-icon">
+                            <FileText className="icon" />
+                          </div>
+                          <div className="report-info">
+                            <div className="report-header">
+                              <h3 className="report-subject">{report.subject}</h3>
+                            </div>
+                            <div className="report-meta">
+                              <span>{report.semester}</span>
+                              <span>Class {report.class}</span>
+                              <span>{formatDate(report.upload_timestamp)}</span>
+                            </div>
+                            <div className="report-filename">
+                              <small>{report.original_filename}</small>
+                            </div>
+                          </div>
                         </div>
-                        <div className="report-info">
-                          <div className="report-header">
-                            <h3 className="report-subject">{report.subject}</h3>
-                            {report.trend === "up" ? (
-                              <TrendingUp className="trend-icon trend-up" />
-                            ) : (
-                              <TrendingDown className="trend-icon trend-down" />
+                        <div className="report-right">
+                          <div className="attendance-display">
+                            <div className={`attendance-value ${getAttendanceColor(avgAttendanceValue)}`}>
+                              {avgAttendanceValue}%
+                            </div>
+                            <p className="attendance-label">Avg. Attendance</p>
+                          </div>
+                          <div className="button-group">
+                            {report.csv_url && (
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="download-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleDownload(report.csv_url, report.csv_filename)
+                                }}
+                              >
+                                <Download className="btn-icon-small" />
+                                CSV
+                              </Button>
+                            )}
+                            {report.pdf_url && (
+                              <Button 
+                                variant="outline" 
+                                size="sm" 
+                                className="download-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  handleDownload(report.pdf_url, report.pdf_filename)
+                                }}
+                              >
+                                <Download className="btn-icon-small" />
+                                PDF
+                              </Button>
                             )}
                           </div>
-                          <div className="report-meta">
-                            <span>{report.semester}</span>
-                            <span>Class {report.class}</span>
-                            <span>{report.totalStudents} students</span>
-                            <span>{report.totalLectures} lectures</span>
-                          </div>
                         </div>
                       </div>
-                      <div className="report-right">
-                        <div className="attendance-display">
-                          <div className={`attendance-value ${getAttendanceColor(report.avgAttendance)}`}>
-                            {report.avgAttendance}%
-                          </div>
-                          <p className="attendance-label">Avg. Attendance</p>
-                        </div>
-                        <Button variant="outline" size="sm" className="download-btn">
-                          <Download className="btn-icon-small" />
-                          Download
-                        </Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                )
+              })}
             </div>
           )}
 
           {/* Department Summary */}
-          <Card className="department-card">
-            <CardHeader>
-              <CardTitle>Department Summary</CardTitle>
-              <CardDescription>
-                {hasActiveFilters 
-                  ? "Statistics for filtered results" 
-                  : "Overall attendance statistics for Computer Engineering"}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="summary-items">
-                <div className="summary-item">
-                  <div>
-                    <p className="summary-title">Total Lectures Conducted</p>
-                    <p className="summary-subtitle">
-                      {hasActiveFilters ? "In filtered results" : "Across all subjects"}
-                    </p>
+          {!loading && filteredReports.length > 0 && (
+            <Card className="department-card">
+              <CardHeader>
+                <CardTitle>Summary Statistics</CardTitle>
+                <CardDescription>
+                  {hasActiveFilters 
+                    ? "Statistics for filtered results" 
+                    : "Overall statistics from database"}
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="summary-items">
+                  <div className="summary-item">
+                    <div>
+                      <p className="summary-title">Total Reports</p>
+                      <p className="summary-subtitle">
+                        {hasActiveFilters ? "In filtered results" : "Stored in Supabase"}
+                      </p>
+                    </div>
+                    <div className="summary-value">{totalReports}</div>
                   </div>
-                  <div className="summary-value">{totalLectures}</div>
+                  <div className="summary-item">
+                    <div>
+                      <p className="summary-title">Average Attendance</p>
+                      <p className="summary-subtitle">Across all reports</p>
+                    </div>
+                    <div className="summary-value-group">
+                      <div className={`summary-value ${getAttendanceColor(avgAttendance)}`}>
+                        {avgAttendance}%
+                      </div>
+                      <Badge className={avgAttendance >= 75 ? "badge-success" : "badge-destructive"}>
+                        {avgAttendance >= 75 ? "Good" : "Needs Attention"}
+                      </Badge>
+                    </div>
+                  </div>
+                  <div className="summary-item no-border">
+                    <div>
+                      <p className="summary-title">Unique Subjects</p>
+                      <p className="summary-subtitle">Different subjects tracked</p>
+                    </div>
+                    <div className="summary-value">
+                      {new Set(filteredReports.map(r => r.subject)).size}
+                    </div>
+                  </div>
                 </div>
-                <div className="summary-item">
-                  <div>
-                    <p className="summary-title">Students Above 75%</p>
-                    <p className="summary-subtitle">Meeting attendance requirement</p>
-                  </div>
-                  <div className="summary-value-group">
-                    <div className="summary-value text-success">2,547</div>
-                    <Badge className="badge-success">89.5%</Badge>
-                  </div>
-                </div>
-                <div className="summary-item no-border">
-                  <div>
-                    <p className="summary-title">Students Below 75%</p>
-                    <p className="summary-subtitle">Require attention</p>
-                  </div>
-                  <div className="summary-value-group">
-                    <div className="summary-value text-destructive">300</div>
-                    <Badge variant="destructive">10.5%</Badge>
-                  </div>
-                </div>
-              </div>
-              <div className="department-action">
-                <Button className="full-width">
-                  <Download className="btn-icon" />
-                  {hasActiveFilters ? "Download Filtered Report" : "Download Department Report"}
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </main>
     </div>
