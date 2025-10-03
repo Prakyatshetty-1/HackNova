@@ -1,0 +1,11 @@
+Attendance Report Summary
+=========================
+
+Total students: 23
+Total classes: 9
+Average attendance %: 30.43
+Highest attendance %: 88.89
+Lowest attendance %: 0.00
+Defaulter threshold: 75.0%
+Number of defaulters: 21
+
